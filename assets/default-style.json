@@ -5,7 +5,8 @@
     "fontSize": "15px",
     "lineHeight": "1.75em",
     "textAlign": "justify",
-    "margin": "0.6em 8px 0",
+    "margin": "1em 8px",
+    "firstMargin": "0 8px 1em",
     "color": ""
   },
   "h2": {
@@ -13,7 +14,7 @@
     "fontWeight": "bold",
     "textAlign": "center",
     "lineHeight": "1.75em",
-    "margin": "1.6em 8px 0.6em",
+    "margin": "2em 8px 0.8em",
     "color": ""
   },
   "h3": {
@@ -21,14 +22,14 @@
     "fontWeight": "bold",
     "textAlign": "justify",
     "lineHeight": "1.75em",
-    "margin": "1.2em 8px 0.4em",
+    "margin": "1.6em 8px 0.5em",
     "color": ""
   },
   "blockquote": {
     "fontSize": "15px",
     "lineHeight": "1.75em",
     "textAlign": "justify",
-    "margin": "0.6em 8px 0",
+    "margin": "1em 8px",
     "paddingLeft": "12px",
     "borderLeft": "3px solid rgba(0,0,0,0.12)",
     "textColor": "rgba(0,0,0,0.5)"
@@ -37,11 +38,11 @@
     "fontSize": "15px",
     "lineHeight": "1.75em",
     "textAlign": "justify",
-    "margin": "0.3em 8px 0",
+    "margin": "1em 8px",
     "bullet": "\u2022"
   },
   "hr": {
-    "margin": "1.2em 8px",
+    "margin": "1.6em 8px",
     "lineColor": "rgba(0,0,0,0.12)",
     "lineWidth": "30%",
     "symbol": "\u2726",

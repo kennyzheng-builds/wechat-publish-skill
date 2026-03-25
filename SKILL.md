@@ -12,8 +12,8 @@ End-to-end pipeline: Markdown -> WeChat-formatted HTML -> Publish to WeChat Offi
 | Script | Purpose |
 |--------|---------|
 | `scripts/convert_md_to_wechat.js` | Convert Markdown to WeChat HTML with inline styles, image placeholders, and copy button |
-| `scripts/prepare_api_html.js` | Extract article content from preview HTML, replace base64 images with local paths |
-| `scripts/publish_to_wechat.js` | Upload images and publish HTML to WeChat draft box via API |
+| `scripts/publish_to_wechat.js` | Upload images and publish HTML to WeChat draft box via API (handles base64, local files, and URLs) |
+| `scripts/prepare_api_html.js` | (Optional) Extract content from preview HTML, replace base64 with local paths |
 | `scripts/extract_style.js` | Extract style config from a WeChat article URL (browser-assisted) |
 
 ## Workflow
@@ -22,12 +22,13 @@ End-to-end pipeline: Markdown -> WeChat-formatted HTML -> Publish to WeChat Offi
 
 Read the user's Markdown file. Identify title (H1), sections (H2/H3), bold text, lists, blockquotes, and any image references.
 
-### Step 2: Prepare Images (if needed)
+### Step 2: Prepare Images (if provided)
 
-If user provides images or a URL for screenshots:
-1. Save images to `outputs/img/` as `01-desc.jpg`, `02-desc.jpg`, etc.
-2. Determine anchor text (text after which each image should appear)
+If user provides images:
+1. Save/compress images to `outputs/img/` as `01-desc.jpg`, `02-desc.jpg`, etc. (max 1080px wide, quality 82)
+2. Determine anchor text for each image -- the text in the article after which the image should appear
 3. Write captions for each image
+4. Choose one image as cover (user can specify which)
 
 ### Step 3: Convert Markdown to WeChat HTML
 
@@ -40,48 +41,58 @@ node ~/.claude/skills/wechat-publish/scripts/convert_md_to_wechat.js \
   --captions "Caption 1|||Caption 2"
 ```
 
-Produces `article.html` (placeholders) and `article_full.html` (base64 images).
+Produces:
+- `article.html` -- text version with dashed placeholder boxes (for copy-paste workflow)
+- `article_full.html` -- full preview with base64-embedded images (for API publishing and preview)
 
-### Step 4: Preview
+Features included automatically:
+- Word count and estimated reading time at top (gray text, not italic)
+- All vertical margins in inline styles (critical for WeChat rendering)
+- Sibling `<span>` for bold text (WeChat API strips nested span styles)
+- Underscore italic `_text_` stripped to plain text
 
-Serve HTML and open browser to verify formatting before publishing.
+### Step 4: Preview (optional)
+
+Serve HTML to verify formatting before publishing.
 
 ```bash
 npx -y http-server ./outputs -p 8080 --cors -s &
 ```
 
-### Step 5: Prepare API Version
+### Step 5: Publish to WeChat Draft
 
-```bash
-node ~/.claude/skills/wechat-publish/scripts/prepare_api_html.js \
-  outputs/article_full.html outputs/article_api.html \
-  --images "outputs/img/01.jpg,outputs/img/02.jpg"
-```
-
-### Step 6: Publish to WeChat Draft
+Publish the `_full.html` directly -- the publish script handles base64 image upload automatically.
 
 ```bash
 node ~/.claude/skills/wechat-publish/scripts/publish_to_wechat.js \
-  outputs/article_api.html \
+  outputs/article_full.html \
   --title "Title" --author "Author" \
   --summary "Compelling 120-char summary" \
-  --cover "outputs/img/01.jpg"
+  --cover "outputs/img/cover.jpg"
 ```
 
-Credentials auto-loaded from `.baoyu-skills/.env` or `~/.baoyu-skills/.env`.
+The script will:
+1. Extract `#js_content` from the HTML (strips guide panel, copy bar, footer)
+2. Upload base64 inline images to WeChat CDN via `uploadimg` API
+3. Replace base64 `src` with permanent WeChat CDN URLs
+4. Upload cover image via `add_material` API
+5. Create draft via `draft/add` API
 
-### Step 7: Post-Publish
+Credentials auto-loaded from `.baoyu-skills/.env` or `~/.baoyu-skills/.env`, or set via `WECHAT_APP_ID` / `WECHAT_APP_SECRET` env vars.
 
-Inform user: article is in draft box. **原创声明 must be enabled manually** in mp.weixin.qq.com editor -- API does not support this.
+### Step 6: Post-Publish
+
+Inform user: article is in draft box at mp.weixin.qq.com > 内容管理 > 草稿箱. **原创声明 must be enabled manually** -- API does not support this.
 
 ## Critical Rules
 
 For detailed explanations see `references/wechat-api-pitfalls.md`.
 
+- **Inline vertical margins**: Every `<p>` must have vertical margin in its inline `style` attribute (e.g. `margin: 1em 8px`). WeChat strips `<style>` tags -- only inline styles survive. Without this, paragraphs collapse together in the editor.
 - **Bold text**: Use sibling `<span>` with complete styles, never nested. WeChat API strips inner span styles.
 - **API content**: Only send `js_content` div. Never include guide panel, copy bar, or footer.
-- **Base64 images**: Replace with local file paths before API upload.
-- **Image captions**: `margin: 0 8px` (no top margin) for tight coupling.
+- **Base64 images**: The publish script handles these directly -- no separate prepare step needed.
+- **Image captions**: `margin: 0 8px` (no top margin) for tight coupling with the image above.
 - **Summary**: Write compelling 120-char digest, not article opening text.
 - **原创声明**: Cannot be set via API. Manual step after publishing to draft.
 
@@ -100,4 +111,4 @@ Config fields that can be customized: `paragraph`, `h2`, `h3`, `blockquote`, `li
 
 ## Format-Only Mode
 
-If user only wants formatting (no publish), skip Steps 5-7. Serve preview HTML and provide URL.
+If user only wants formatting (no publish), skip Steps 5-6. Serve preview HTML and provide URL.

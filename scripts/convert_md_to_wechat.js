@@ -11,7 +11,7 @@
  *   --images   img1.jpg,img2.jpg Comma-separated image paths
  *   --anchors  "text1|||text2"   |||-delimited anchor strings for image placement
  *   --captions "cap1|||cap2"     |||-delimited image captions
- *   --style    style.json       Custom style config (see assets/default-style.json)
+ *   --style    style.json        Custom style config (overrides default-style.json)
  *
  * Output:
  *   output.html      - Text version with dashed placeholder boxes
@@ -39,61 +39,51 @@ const authorOverride = getArg('--author');
 const styleArg = getArg('--style');
 
 if (!inputFile) {
-  console.error('Usage: node convert_md_to_wechat.js <input.md> [output.html] [--images ...] [--anchors ...] [--captions ...] [--title ...] [--author ...] [--style style.json]');
+  console.error('Usage: node convert_md_to_wechat.js <input.md> [output.html] [--images ...] [--anchors ...] [--captions ...] [--title ...] [--author ...]');
   process.exit(1);
 }
 
 const md = fs.readFileSync(inputFile, 'utf8');
 
 // ---------- Load style config ----------
-function loadStyleConfig(stylePath) {
-  const defaultStyle = {
-    paragraph: { fontSize: '15px', lineHeight: '1.75em', textAlign: 'justify', margin: '0.6em 8px 0', color: '' },
-    h2: { fontSize: '16px', fontWeight: 'bold', textAlign: 'center', lineHeight: '1.75em', margin: '1.6em 8px 0.6em', color: '' },
-    h3: { fontSize: '15px', fontWeight: 'bold', textAlign: 'justify', lineHeight: '1.75em', margin: '1.2em 8px 0.4em', color: '' },
-    blockquote: { fontSize: '15px', lineHeight: '1.75em', textAlign: 'justify', margin: '0.6em 8px 0', paddingLeft: '12px', borderLeft: '3px solid rgba(0,0,0,0.12)', textColor: 'rgba(0,0,0,0.5)' },
-    list: { fontSize: '15px', lineHeight: '1.75em', textAlign: 'justify', margin: '0.3em 8px 0', bullet: '\u2022' },
-    hr: { margin: '1.2em 8px', lineColor: 'rgba(0,0,0,0.12)', lineWidth: '30%', symbol: '\u2726', symbolColor: 'rgba(0,0,0,0.15)' },
-    imageCaption: { fontSize: '12px', color: 'rgb(136, 136, 136)', fontStyle: 'italic', textAlign: 'center', margin: '0 8px' },
-  };
-  if (!stylePath) return defaultStyle;
-  try {
-    const custom = JSON.parse(fs.readFileSync(stylePath, 'utf8'));
-    // Deep merge: custom overrides defaults per section
-    for (const key of Object.keys(defaultStyle)) {
-      if (custom[key]) defaultStyle[key] = { ...defaultStyle[key], ...custom[key] };
-    }
-    console.log(`Style: ${custom._name || stylePath}`);
-    return defaultStyle;
-  } catch (e) {
-    console.error(`Warning: Could not load style ${stylePath}, using default`);
-    return defaultStyle;
+const defaultStylePath = path.join(__dirname, '..', 'assets', 'default-style.json');
+let styleConfig = {};
+if (fs.existsSync(defaultStylePath)) {
+  styleConfig = JSON.parse(fs.readFileSync(defaultStylePath, 'utf8'));
+}
+if (styleArg && fs.existsSync(styleArg)) {
+  const custom = JSON.parse(fs.readFileSync(styleArg, 'utf8'));
+  // Merge custom into defaults (shallow per-section merge)
+  for (const key of Object.keys(custom)) {
+    if (key.startsWith('_')) continue;
+    styleConfig[key] = { ...(styleConfig[key] || {}), ...custom[key] };
   }
 }
 
-const cfg = loadStyleConfig(styleArg);
+// ---------- WeChat inline style constants ----------
+const pc = styleConfig.paragraph || {};
+const hc2 = styleConfig.h2 || {};
+const hc3 = styleConfig.h3 || {};
+const bq = styleConfig.blockquote || {};
+const li = styleConfig.list || {};
+const hrc = styleConfig.hr || {};
 
-// ---------- WeChat inline style constants (built from config) ----------
-const c = (v) => v ? ` color: ${v};` : '';
 const S = {
-  p:         `text-align: ${cfg.paragraph.textAlign}; line-height: ${cfg.paragraph.lineHeight}; margin: ${cfg.paragraph.margin};${c(cfg.paragraph.color)}`,
-  pFirst:    `text-align: ${cfg.paragraph.textAlign}; line-height: ${cfg.paragraph.lineHeight}; margin: 0 8px 0;${c(cfg.paragraph.color)}`,
-  pCenter:   `text-align: center; line-height: ${cfg.paragraph.lineHeight}; margin: ${cfg.paragraph.margin};${c(cfg.paragraph.color)}`,
-  body:      `font-size: ${cfg.paragraph.fontSize};${c(cfg.paragraph.color)}`,
-  h2:        `font-size: ${cfg.h2.fontSize}; font-weight: ${cfg.h2.fontWeight || 'bold'};${c(cfg.h2.color)}`,
-  h3:        `font-size: ${cfg.h3.fontSize}; font-weight: ${cfg.h3.fontWeight || 'bold'};${c(cfg.h3.color)}`,
-  h2Wrap:    `text-align: ${cfg.h2.textAlign}; line-height: ${cfg.h2.lineHeight}; margin: ${cfg.h2.margin};`,
-  h3Wrap:    `text-align: ${cfg.h3.textAlign}; line-height: ${cfg.h3.lineHeight}; margin: ${cfg.h3.margin};`,
-  quote:     `text-align: ${cfg.blockquote.textAlign}; line-height: ${cfg.blockquote.lineHeight}; margin: ${cfg.blockquote.margin}; padding-left: ${cfg.blockquote.paddingLeft}; border-left: ${cfg.blockquote.borderLeft}; color: ${cfg.blockquote.textColor};`,
-  quoteText: `font-size: ${cfg.blockquote.fontSize}; color: ${cfg.blockquote.textColor};`,
-  hr:        `text-align: center; margin: ${cfg.hr.margin}; visibility: visible;`,
-  hrInner:   `display: inline-block; width: ${cfg.hr.lineWidth}; height: 1px; background: ${cfg.hr.lineColor}; vertical-align: middle;`,
-  list:      `text-align: ${cfg.list.textAlign}; line-height: ${cfg.list.lineHeight}; margin: ${cfg.list.margin};`,
+  p:         `margin: ${pc.margin || '1em 8px'};`,
+  pFirst:    `margin: ${pc.firstMargin || '0 8px 1em'};`,
+  pCenter:   `text-align: center; margin: ${pc.margin || '1em 8px'};`,
+  body:      `font-size: ${pc.fontSize || '15px'};${pc.color ? ` color: ${pc.color};` : ''}`,
+  h2:        `font-size: ${hc2.fontSize || '16px'}; font-weight: ${hc2.fontWeight || 'bold'};${hc2.color ? ` color: ${hc2.color};` : ''}`,
+  h3:        `font-size: ${hc3.fontSize || '15px'}; font-weight: ${hc3.fontWeight || 'bold'};${hc3.color ? ` color: ${hc3.color};` : ''}`,
+  h2Wrap:    `text-align: ${hc2.textAlign || 'center'}; margin: ${hc2.margin || '2em 8px 0.8em'};`,
+  h3Wrap:    `margin: ${hc3.margin || '1.6em 8px 0.5em'};`,
+  quote:     `margin: ${bq.margin || '1em 8px'}; padding-left: ${bq.paddingLeft || '12px'}; border-left: ${bq.borderLeft || '3px solid rgba(0,0,0,0.12)'}; color: ${bq.textColor || 'rgba(0,0,0,0.5)'};`,
+  quoteText: `font-size: ${bq.fontSize || '15px'}; color: ${bq.textColor || 'rgba(0,0,0,0.5)'};`,
+  hr:        `text-align: center; margin: ${hrc.margin || '1.6em 8px'}; visibility: visible;`,
+  hrInner:   `display: inline-block; width: ${hrc.lineWidth || '30%'}; height: 1px; background: ${hrc.lineColor || 'rgba(0,0,0,0.12)'}; vertical-align: middle;`,
+  list:      `margin: ${li.margin || '1em 8px'};`,
 };
-const listBullet = cfg.list.bullet || '\u2022';
-const hrSymbol = cfg.hr.symbol || '\u2726';
-const hrSymbolColor = cfg.hr.symbolColor || 'rgba(0,0,0,0.15)';
-const captionStyle = cfg.imageCaption;
+const listBullet = li.bullet || '\u2022';
 
 const BOLD_OPEN = '\u0001';
 const BOLD_CLOSE = '\u0002';
@@ -150,8 +140,23 @@ function processInline(text) {
   text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   text = text.replace(/\*\*(.+?)\*\*/g, BOLD_OPEN + '$1' + BOLD_CLOSE);
   text = text.replace(/`([^`]+)`/g, CODE_OPEN + '$1' + CODE_CLOSE);
+  // Underscore italic: _text_ → plain text (strip markers)
+  text = text.replace(/(?:^|(?<=\s))_([^_]+?)_(?:$|(?=[\s，。、；：！？]))/g, '$1');
   return text;
 }
+
+// ---------- Word count & reading time ----------
+function countWords(text) {
+  // Strip markdown syntax
+  const plain = text.replace(/^#+\s/gm, '').replace(/\*\*/g, '').replace(/`[^`]+`/g, '').replace(/^[->\s]*/gm, '').replace(/^---$/gm, '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+  // Count Chinese characters
+  const cjk = (plain.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
+  // Count non-CJK words (English etc.)
+  const nonCjk = plain.replace(/[\u4e00-\u9fff\u3400-\u4dbf]/g, ' ').split(/\s+/).filter(w => w.length > 0).length;
+  return cjk + nonCjk;
+}
+const wordCount = countWords(md);
+const readingMinutes = Math.max(1, Math.ceil(wordCount / 400));
 
 // ---------- Convert Markdown to HTML lines ----------
 const lines = md.split('\n');
@@ -171,7 +176,7 @@ while (i < lines.length) {
   }
   // HR
   if (line === '---') {
-    html.push(`<section style="${S.hr}"><span style="${S.hrInner}"></span><span style="display: inline-block; margin: 0 10px; vertical-align: middle; color: ${hrSymbolColor};">${hrSymbol}</span><span style="${S.hrInner}"></span></section>`);
+    html.push(`<section style="${S.hr}"><span style="${S.hrInner}"></span><span style="display: inline-block; margin: 0 10px; vertical-align: middle; color: ${hrc.symbolColor || 'rgba(0,0,0,0.15)'};">${hrc.symbol || '\u2726'}</span><span style="${S.hrInner}"></span></section>`);
     isFirstElement = false;
     i++; continue;
   }
@@ -228,6 +233,10 @@ while (i < lines.length) {
   }
 }
 
+// ---------- Insert reading time at the top ----------
+const readingMeta = `<p style="margin: 0 8px 1em;"><span leaf=""><span textstyle="" style="font-size: 14px; color: rgba(0,0,0,0.4);">全文约 ${wordCount} 字，阅读需 ${readingMinutes} 分钟。</span></span></p>`;
+html.unshift(readingMeta);
+
 // ---------- Image insertion ----------
 const imageFiles = imagesArg ? imagesArg.split(',') : [];
 const anchors = anchorsArg ? anchorsArg.split('|||') : [];
@@ -236,7 +245,7 @@ const captions = captionsArg ? captionsArg.split('|||') : [];
 function imgTag(src, caption) {
   let h = `<section style="text-align: center; margin: 0.8em 8px 0;"><img src="${src}" style="width: 100%; height: auto !important; border-radius: 4px;" alt="Image"></section>`;
   if (caption) {
-    h += `\n<p style="text-align: ${captionStyle.textAlign}; line-height: 1.4em; margin: ${captionStyle.margin};"><span leaf=""><span textstyle="" style="font-size: ${captionStyle.fontSize}; color: ${captionStyle.color}; font-style: ${captionStyle.fontStyle};">${caption}</span></span></p>`;
+    h += `\n<p style="text-align: center; line-height: 1.4em; margin: 0 8px;"><span leaf=""><span textstyle="" style="font-size: ${(styleConfig.imageCaption || {}).fontSize || '12px'}; color: ${(styleConfig.imageCaption || {}).color || 'rgb(136, 136, 136)'}; font-style: ${(styleConfig.imageCaption || {}).fontStyle || 'italic'};">${caption}</span></span></p>`;
   }
   return h;
 }
@@ -244,7 +253,7 @@ function imgTag(src, caption) {
 function imgPlaceholder(num, filename, caption) {
   let h = `<section style="text-align: center; margin: 0.8em 8px 0; padding: 20px; background: #f5f5f5; border: 1px dashed #ccc; border-radius: 6px;"><p style="text-align: center; margin: 0; font-size: 13px; color: #999; line-height: 1.6;">\u2191 \u63d2\u5165\u56fe\u7247 ${num}\uff1a${filename} \u2191</p></section>`;
   if (caption) {
-    h += `\n<p style="text-align: ${captionStyle.textAlign}; line-height: 1.4em; margin: ${captionStyle.margin};"><span leaf=""><span textstyle="" style="font-size: ${captionStyle.fontSize}; color: ${captionStyle.color}; font-style: ${captionStyle.fontStyle};">${caption}</span></span></p>`;
+    h += `\n<p style="text-align: center; line-height: 1.4em; margin: 0 8px;"><span leaf=""><span textstyle="" style="font-size: ${(styleConfig.imageCaption || {}).fontSize || '12px'}; color: ${(styleConfig.imageCaption || {}).color || 'rgb(136, 136, 136)'}; font-style: ${(styleConfig.imageCaption || {}).fontStyle || 'italic'};">${caption}</span></span></p>`;
   }
   return h;
 }
@@ -308,7 +317,8 @@ body{background:#ededed;font-family:-apple-system,BlinkMacSystemFont,"Helvetica 
 .meta-info .original-tag{display:inline-block;font-size:12px;color:rgba(0,0,0,.3);border:1px solid rgba(0,0,0,.12);border-radius:2px;padding:1px 4px;line-height:1.4}
 .meta-info .author-link{color:#576b95;text-decoration:none}
 .rich_media_content{padding:0 24px 40px 24px;color:rgba(0,0,0,.9);font-size:17px;line-height:27.2px;word-wrap:break-word;overflow:hidden}
-.rich_media_content p,.rich_media_content section{margin:0;padding:0}
+.rich_media_content p{margin:1em 0;padding:0}
+.rich_media_content section{margin:0;padding:0}
 .rich_media_content strong{font-weight:bold}
 .rich_media_content code{font-family:Menlo,Monaco,Consolas,monospace}
 .rich_media_content img{max-width:100%}
@@ -358,7 +368,6 @@ body{background:#ededed;font-family:-apple-system,BlinkMacSystemFont,"Helvetica 
 ${body}
     </div>
     <div class="article-footer">
-      <p>\u00a9 THE END</p>
     </div>
   </div>
 </div>

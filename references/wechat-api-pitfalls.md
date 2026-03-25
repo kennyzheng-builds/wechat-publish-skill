@@ -1,5 +1,22 @@
 # WeChat API Publishing Pitfalls
 
+## Inline Vertical Margins (Most Common Issue)
+
+WeChat strips all `<style>` tags. Only inline `style` attributes on individual elements survive. If you rely on page CSS like `.rich_media_content p { margin: 1em 0 }` for paragraph spacing, paragraphs will collapse together in WeChat's editor and reader.
+
+**Wrong** (margin comes from page CSS, gets stripped):
+```html
+<style>.rich_media_content p { margin: 1em 0 }</style>
+<p style="margin-left: 8px; margin-right: 8px;">Paragraph text</p>
+```
+
+**Correct** (vertical margin in inline style):
+```html
+<p style="margin: 1em 8px;">Paragraph text</p>
+```
+
+Every `<p>`, `<section>`, blockquote, and list item must carry its own vertical margin inline. The converter uses `margin: 1em 8px` for paragraphs.
+
 ## Bold Text Rendering
 
 WeChat API strips nested `<span>` styles. Never nest `<span style="font-weight:bold">` inside `<span style="font-size:15px">`.
@@ -22,11 +39,11 @@ The preview HTML contains a guide panel, copy bar, header, and footer that must 
 
 Use `prepare_api_html.js` to extract cleanly, or `publish_to_wechat.js` which auto-extracts from either `<div id="output">` or `js_content`.
 
-## Base64 Images Not Supported
+## Base64 Images
 
-WeChat's image upload API only accepts local file paths or HTTP URLs. Base64 data URIs in `<img src="data:...">` cannot be uploaded.
+The `publish_to_wechat.js` script now handles base64 data URIs directly. It saves each base64 image to a temp file, uploads it to WeChat's `uploadimg` API endpoint (which doesn't count toward permanent material quota), and replaces the `src` with the returned CDN URL.
 
-Use `prepare_api_html.js --images` to replace base64 URIs with absolute local file paths before publishing.
+The separate `prepare_api_html.js` step is no longer required but is kept for backward compatibility.
 
 ## Image-Caption Spacing
 

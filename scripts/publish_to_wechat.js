@@ -106,33 +106,47 @@ async function fetchAccessToken(appId, appSecret) {
   return data.access_token;
 }
 
-async function uploadImage(imagePath, accessToken, baseDir) {
+function resolveImageBuffer(imagePath, baseDir) {
   let fileBuffer, filename, contentType;
-
   if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
-    const response = await fetch(imagePath);
-    if (!response.ok) throw new Error(`Failed to download image: ${imagePath}`);
-    const buffer = await response.arrayBuffer();
-    if (buffer.byteLength === 0) throw new Error(`Remote image is empty: ${imagePath}`);
-    fileBuffer = Buffer.from(buffer);
-    filename = path.basename(imagePath.split('?')[0]) || 'image.jpg';
-    contentType = response.headers.get('content-type') || 'image/jpeg';
-  } else {
-    const resolvedPath = path.isAbsolute(imagePath) ? imagePath : path.resolve(baseDir || process.cwd(), imagePath);
-    if (!fs.existsSync(resolvedPath)) throw new Error(`Image not found: ${resolvedPath}`);
-    if (fs.statSync(resolvedPath).size === 0) throw new Error(`Image is empty: ${resolvedPath}`);
-    fileBuffer = fs.readFileSync(resolvedPath);
-    filename = path.basename(resolvedPath);
-    const ext = path.extname(filename).toLowerCase();
-    const mimeTypes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
-    contentType = mimeTypes[ext] || 'image/jpeg';
+    return { remote: true, url: imagePath };
   }
+  const resolvedPath = path.isAbsolute(imagePath) ? imagePath : path.resolve(baseDir || process.cwd(), imagePath);
+  if (!fs.existsSync(resolvedPath)) throw new Error(`Image not found: ${resolvedPath}`);
+  if (fs.statSync(resolvedPath).size === 0) throw new Error(`Image is empty: ${resolvedPath}`);
+  fileBuffer = fs.readFileSync(resolvedPath);
+  filename = path.basename(resolvedPath);
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+  contentType = mimeTypes[ext] || 'image/jpeg';
+  return { fileBuffer, filename, contentType };
+}
 
+function buildMultipart(fileBuffer, filename, contentType) {
   const boundary = `----WebKitFormBoundary${Date.now().toString(16)}`;
   const header = [`--${boundary}`, `Content-Disposition: form-data; name="media"; filename="${filename}"`, `Content-Type: ${contentType}`, '', ''].join('\r\n');
   const footer = `\r\n--${boundary}--\r\n`;
   const body = Buffer.concat([Buffer.from(header, 'utf-8'), fileBuffer, Buffer.from(footer, 'utf-8')]);
+  return { body, boundary };
+}
 
+async function uploadImage(imagePath, accessToken, baseDir) {
+  const resolved = resolveImageBuffer(imagePath, baseDir);
+  let fileBuffer, filename, contentType;
+
+  if (resolved.remote) {
+    const response = await fetch(resolved.url);
+    if (!response.ok) throw new Error(`Failed to download image: ${resolved.url}`);
+    const buffer = await response.arrayBuffer();
+    if (buffer.byteLength === 0) throw new Error(`Remote image is empty: ${resolved.url}`);
+    fileBuffer = Buffer.from(buffer);
+    filename = path.basename(resolved.url.split('?')[0]) || 'image.jpg';
+    contentType = response.headers.get('content-type') || 'image/jpeg';
+  } else {
+    ({ fileBuffer, filename, contentType } = resolved);
+  }
+
+  const { body, boundary } = buildMultipart(fileBuffer, filename, contentType);
   const url = `https://api.weixin.qq.com/cgi-bin/material/add_material?access_token=${accessToken}&type=image`;
   const res = await fetch(url, {
     method: 'POST',
@@ -143,6 +157,22 @@ async function uploadImage(imagePath, accessToken, baseDir) {
   if (data.errcode && data.errcode !== 0) throw new Error(`Upload failed ${data.errcode}: ${data.errmsg}`);
   if (data.url && data.url.startsWith('http://')) data.url = data.url.replace(/^http:\/\//i, 'https://');
   return data;
+}
+
+// Upload image for article content (uses uploadimg endpoint, no quota limit)
+async function uploadContentImage(fileBuffer, filename, contentType, accessToken) {
+  const { body, boundary } = buildMultipart(fileBuffer, filename, contentType);
+  const url = `https://api.weixin.qq.com/cgi-bin/media/uploadimg?access_token=${accessToken}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
+    body,
+  });
+  const data = await res.json();
+  if (data.errcode && data.errcode !== 0) throw new Error(`Upload failed ${data.errcode}: ${data.errmsg}`);
+  if (!data.url) throw new Error('No url in uploadimg response');
+  if (data.url.startsWith('http://')) data.url = data.url.replace(/^http:\/\//i, 'https://');
+  return data.url;
 }
 
 async function uploadImagesInHtml(html, accessToken, baseDir) {
@@ -158,13 +188,39 @@ async function uploadImagesInHtml(html, accessToken, baseDir) {
     const [fullTag, src] = match;
     if (!src) continue;
     // Skip already-uploaded WeChat CDN images
-    if (src.startsWith('https://mmbiz.qpic.cn')) {
+    if (src.startsWith('https://mmbiz.qpic.cn') || src.startsWith('http://mmbiz.qpic.cn')) {
       if (!firstMediaId) firstMediaId = src;
       continue;
     }
-    // Skip base64 data URIs (should not be present in API version)
+    // Handle base64 data URIs: save to temp, upload via uploadimg, replace with CDN URL
     if (src.startsWith('data:')) {
-      console.error(`[publish] WARNING: Skipping base64 image (not supported by API). Use local file paths.`);
+      const b64Match = src.match(/^data:image\/([\w+]+);base64,(.+)$/);
+      if (!b64Match) {
+        console.error(`[publish] WARNING: Unrecognized data URI format, skipping`);
+        continue;
+      }
+      const ext = b64Match[1] === 'jpeg' ? 'jpg' : b64Match[1];
+      const b64Data = b64Match[2];
+      const tmpFile = path.join(require('os').tmpdir(), `wechat_upload_${Date.now()}_${allMediaIds.length}.${ext}`);
+      const mimeMap = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif' };
+      try {
+        fs.writeFileSync(tmpFile, Buffer.from(b64Data, 'base64'));
+        console.error(`[publish] Uploading base64 image (${(b64Data.length * 0.75 / 1024).toFixed(0)} KB)...`);
+        const cdnUrl = await uploadContentImage(
+          fs.readFileSync(tmpFile),
+          `image_${allMediaIds.length}.${ext}`,
+          mimeMap[ext] || 'image/jpeg',
+          accessToken
+        );
+        const newTag = fullTag.replace(/\ssrc=["'][^"']+["']/, ` src="${cdnUrl}"`);
+        updatedHtml = updatedHtml.replace(fullTag, newTag);
+        allMediaIds.push(cdnUrl);
+        if (!firstMediaId) firstMediaId = cdnUrl;
+        fs.unlinkSync(tmpFile);
+      } catch (err) {
+        console.error(`[publish] Failed to upload base64 image:`, err.message);
+        try { fs.unlinkSync(tmpFile); } catch (_) {}
+      }
       continue;
     }
 
